@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+python-multipart
+pymeshlab
+open3d
+numpy
