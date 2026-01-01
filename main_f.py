@@ -1,7 +1,7 @@
 import os
 import sys
 
-# Ensure we can import from src
+# Ensure the local 'src' directory is in the Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from src.core.cleaner import MeshCleaner
@@ -9,11 +9,21 @@ from src.core.stitcher import MeshStitcher
 
 # CONFIGURATION
 # ---------------------------------------------------------
-# UPDATE THESE PATHS TO MATCH YOUR FOLDER STRUCTURE
 DATA_DIR = "data/uploads" 
 OUTPUT_DIR = "data/processed"
-CHUNK_1_FILE = "chunk01_mesh_learnable_sdf.ply"
-CHUNK_2_FILE = "chunk02_with_overlap_mesh_learnable_sdf.ply"
+
+# Define your data pairs: (Mesh File, Its specific COLMAP Sparse Cloud)
+# This mapping prevents the blob from 'overwriting' the real road data.
+CHUNKS = {
+    "chunk1": {
+        "mesh": "chunk01_mesh_learnable_sdf.ply",
+        "colmap": "chunk1_points3D.ply" 
+    },
+    "chunk2": {
+        "mesh": "chunk02_with_overlap_mesh_learnable_sdf.ply",
+        "colmap": "chunk2_points3D.ply" 
+    }
+}
 # ---------------------------------------------------------
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -21,40 +31,38 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 def main():
     cleaner = MeshCleaner()
     stitcher = MeshStitcher()
+    clean_paths = []
 
-    # Define paths
-    raw_c1 = os.path.join(DATA_DIR, CHUNK_1_FILE)
-    raw_c2 = os.path.join(DATA_DIR, CHUNK_2_FILE)
-    
-    clean_c1 = os.path.join(OUTPUT_DIR, "clean_chunk_1.ply")
-    clean_c2 = os.path.join(OUTPUT_DIR, "clean_chunk_2.ply")
-    final_mesh = os.path.join(OUTPUT_DIR, "final_stitched_road.ply")
+    # --- STEP 1 & 2: RECOVER REAL GEOMETRY FROM BLOBS ---
+    for chunk_id, files in CHUNKS.items():
+        print(f"\n=== PROCESSING {chunk_id.upper()} ===")
+        
+        mesh_path = os.path.join(DATA_DIR, files["mesh"])
+        colmap_path = os.path.join(DATA_DIR, files["colmap"])
+        out_path = os.path.join(OUTPUT_DIR, f"recovered_{chunk_id}.ply")
 
-    # --- STEP 1: CLEAN CHUNK 1 ---
-    print("\n=== STEP 1: PROCESSING CHUNK 1 ===")
-    if os.path.exists(raw_c1):
-        cleaner.process_mesh(raw_c1, clean_c1)
+        if os.path.exists(mesh_path) and os.path.exists(colmap_path):
+            # The cleaner now uses the COLMAP file as a 'Truth Mask' to reveal the road
+            cleaner.process_mesh(mesh_path, out_path, colmap_path)
+            clean_paths.append(out_path)
+        else:
+            if not os.path.exists(mesh_path):
+                print(f"Error: Mesh file not found at {mesh_path}")
+            if not os.path.exists(colmap_path):
+                print(f"Error: COLMAP 'Truth Mask' not found at {colmap_path}")
+
+    # --- STEP 3: STITCHING RECOVERED CHUNKS ---
+    if len(clean_paths) == 2:
+        print("\n=== STEP 3: STITCHING RECOVERED ROAD SECTIONS ===")
+        final_output = os.path.join(OUTPUT_DIR, "final_digital_twin_road.ply")
+        
+        # Stitches the road sections revealed by the Truth Mask
+        stitcher.stitch(clean_paths[0], clean_paths[1], final_output)
+        
+        print(f"\n[SUCCESS] Pipeline Completed.")
+        print(f"Final simulation-ready road saved to: {final_output}")
     else:
-        print(f"Error: Could not find {raw_c1}")
-        return
-
-    # --- STEP 2: CLEAN CHUNK 2 ---
-    print("\n=== STEP 2: PROCESSING CHUNK 2 ===")
-    if os.path.exists(raw_c2):
-        cleaner.process_mesh(raw_c2, clean_c2)
-    else:
-        print(f"Error: Could not find {raw_c2}")
-        return
-
-    # --- STEP 3: STITCHING ---
-    print("\n=== STEP 3: STITCHING ===")
-    if os.path.exists(clean_c1) and os.path.exists(clean_c2):
-        stitcher.stitch(clean_c1, clean_c2, final_mesh)
-        print(f"\n[SUCCESS] Pipeline Finished.")
-        print(f"Final output saved to: {final_mesh}")
-        print("Open this file in MeshLab to verify the stitching.")
-    else:
-        print("Skipping stitching (missing clean files).")
+        print("\n[FAILED] Could not proceed to stitching. Check file paths above.")
 
 if __name__ == "__main__":
     main()
