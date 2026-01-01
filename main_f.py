@@ -44,6 +44,7 @@ def main():
         if os.path.exists(mesh_path) and os.path.exists(colmap_path):
             # The cleaner now uses the COLMAP file as a 'Truth Mask' to reveal the road
             cleaner.process_mesh(mesh_path, out_path, colmap_path)
+            cleaner.ms.clear()
             clean_paths.append(out_path)
         else:
             if not os.path.exists(mesh_path):
