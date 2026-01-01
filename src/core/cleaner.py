@@ -8,7 +8,6 @@ class MeshCleaner:
         self.ms = pymeshlab.MeshSet()
 
     def _fix_orientation_robustly(self, mesh):
-        """Standardizes Up-vector (+Y) and grounds the mesh at Y=0."""
         mesh.compute_vertex_normals()
         normals = np.asarray(mesh.vertex_normals)
         if np.median(normals[:, 1]) < 0:
@@ -20,7 +19,6 @@ class MeshCleaner:
         return mesh
 
     def _remove_floating_artifacts(self, mesh):
-        """Removes disconnected 'blobs' by keeping only the Largest Connected Component."""
         print("   > [Open3D] Removing floating artifacts (Largest Connected Component)...")
         triangle_clusters, cluster_n_triangles, _ = mesh.cluster_connected_triangles()
         triangle_clusters = np.asarray(triangle_clusters)
@@ -36,13 +34,12 @@ class MeshCleaner:
         return mesh
 
     def _density_aware_clean(self, mesh, colmap_pcd_path):
-        """Filters noise using COLMAP data to protect the road."""
         print(f"   > [Open3D] Filtering with Density Protection...")
         sparse_pcd = o3d.io.read_point_cloud(colmap_pcd_path)
         bbox = sparse_pcd.get_axis_aligned_bounding_box()
         
-        min_b = bbox.get_min_bound() - [10, 2, 10]
-        max_b = bbox.get_max_bound() + [10, 15, 10]
+        min_b = bbox.get_min_bound() - [15, 7, 15]
+        max_b = bbox.get_max_bound() + [15, 20, 15]
         mesh = mesh.crop(o3d.geometry.AxisAlignedBoundingBox(min_b, max_b))
         
         pcd = o3d.geometry.PointCloud()
@@ -57,7 +54,6 @@ class MeshCleaner:
         return mesh.select_by_index(final_indices)
 
     def _flatten_road_surface(self, mesh, height_threshold=0.5):
-        """Modified to recompute normals after moving vertices."""
         print("   > [Open3D] Flattening road surface and updating normals...")
         verts = np.asarray(mesh.vertices)
         ground_indices = np.where(verts[:, 1] < height_threshold)[0]
@@ -76,18 +72,15 @@ class MeshCleaner:
                 
             mesh.vertices = o3d.utility.Vector3dVector(verts)
         
-        # CRITICAL: Geometric changes invalidate normals. Recompute them here.
         mesh.compute_vertex_normals()
         return mesh
 
     def process_mesh(self, input_path: str, output_path: str, colmap_path: str) -> str:
         print(f"\nSTATUS: High-Fidelity Refinement for {os.path.basename(input_path)}")
         
-        # 1. Load Original Mesh as Reference for Color
         self.ms.load_new_mesh(input_path)
         original_id = self.ms.current_mesh_id() 
         
-        # 2. Geometry Prep (Open3D)
         mesh = o3d.io.read_triangle_mesh(input_path)
         mesh = self._fix_orientation_robustly(mesh)
         mesh = self._density_aware_clean(mesh, colmap_path)
@@ -97,16 +90,12 @@ class MeshCleaner:
         temp_path = "data/processed/temp_refined_geo.ply"
         o3d.io.write_triangle_mesh(temp_path, mesh)
 
-        # 3. Load Cleaned Geometry into MeshSet
         self.ms.load_new_mesh(temp_path)
         
-        # 4. Standardize Normals and Purge Invalid Data
         self.ms.compute_normal_per_vertex()
-        # Ensure we use the correct filter name for conditional selection found earlier
         self.ms.compute_selection_by_condition_per_vertex(condselect="(nx==0 && ny==0 && nz==0)")
         self.ms.meshing_remove_selected_vertices()
 
-        # 5. Screened Poisson Reconstruction
         print("   > [MeshLab] Running Screened Poisson Reconstruction...")
         self.ms.generate_surface_reconstruction_screened_poisson(
             depth=10, 
@@ -115,47 +104,28 @@ class MeshCleaner:
         )
         reconstructed_id = self.ms.current_mesh_id()
 
-        # 6. Trim Low-Density Artifacts (The 'Melted' regions)
         print("   > [MeshLab] Trimming low-density artifacts (q < 7)...")
         self.ms.compute_selection_by_condition_per_vertex(condselect="(q < 7)")
         self.ms.meshing_remove_selected_vertices()
 
-        # 7. DYNAMIC COLOR RECOVERY: Auto-discover the correct parameter
         print("   > [MeshLab] Recovering realistic textures...")
         try:
-            # Get all valid parameters for this filter in your current version
-            filter_name = 'transfer_attributes_per_vertex'
-            params = self.ms.filter_parameter_details(filter_name)
-            
-            # Find the parameter key that relates to color transfer
-            color_key = None
-            for key in params.keys():
-                if 'color' in key.lower():
-                    color_key = key
-                    break
-            
-            if color_key:
-                print(f"     >> Discovered correct parameter: '{color_key}'")
-                kwargs = {
-                    'sourcemesh': original_id,
-                    'targetmesh': reconstructed_id,
-                    color_key: True
-                }
-                self.ms.transfer_attributes_per_vertex(**kwargs)
-            else:
-                print("     >> [WARNING] Could not find a 'color' parameter. Skipping texture recovery.")
+            kwargs = {
+                'sourcemesh': original_id,
+                'targetmesh': reconstructed_id,
+                'colortransfer': True
+            }
+            self.ms.transfer_attributes_per_vertex(**kwargs)
+
         except Exception as e:
             print(f"     >> [ERROR] Dynamic color recovery failed: {e}")
 
-        # 8. Final Optimization for Digital Twin
         print("   > [MeshLab] Applying final Taubin smoothing and decimation...")
         self.ms.apply_coord_taubin_smoothing(stepsmoothnum=5)
-        self.ms.meshing_decimation_quadric_edge_collapse(targetfacenum=350000)
+        self.ms.meshing_decimation_quadric_edge_collapse(targetfacenum=450000)
 
-        # Save finalized mesh with vertex colors enabled
         self.ms.save_current_mesh(output_path, binary=True, save_vertex_color=True)
         
-        # Cleanup
         self.ms.clear()
         if os.path.exists(temp_path): os.remove(temp_path)
         return output_path
