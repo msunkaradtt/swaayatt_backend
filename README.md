@@ -1,3 +1,5 @@
+# Large-Scale Environment for Simulation: Digital Twin Pipeline
+
 **Author:** Mohith Bhargav Sunkara
 
 ## 1. Project Overview
@@ -8,15 +10,15 @@ The system is built as a backend service using **FastAPI**. It handles the follo
 
 1. **Cleaning:** Removes noise, floating artifacts, and fixes geometry.
 2. **Refinement:** Flattens road surfaces and improves mesh quality using Poisson reconstruction.
-3. **Stitching:** Merges multiple mesh chunks (e.g., forward and backward views) into one single map.
+3. **Stitching:** Merges multiple mesh chunks into one single map using advanced registration techniques.
 
 ## 2. Features
 
 * **Automatic File Pairing:** You can upload all files at once. The system automatically matches mesh files with their corresponding COLMAP point cloud files.
 * **Density-Aware Cleaning:** Uses the original COLMAP point cloud to identify and keep only the valid parts of the mesh.
 * **Road Flattening:** Detects the ground using mathematics (RANSAC plane fitting) and flattens it to make it smooth for vehicles.
-* **Robust Stitching:** Uses Global Alignment (FPFH features) and Fine Alignment (ICP) to join different chunks of the street accurately.
-* **Texture Recovery:** preserving the original colors during the remeshing process.
+* **Robust Multi-Stage Stitching:** Implements a "Coarse-to-Fine" registration strategy using FPFH features for rough alignment and Point-to-Plane ICP for precise locking.
+* **Texture Recovery:** Preserves the original colors during the remeshing process.
 
 ## 3. Directory Structure
 
@@ -39,16 +41,16 @@ swaayatt_backend/
 
 ### Prerequisites
 
-* Python 3.8 or higher
-* Operating System: Linux (recommended), Windows, or macOS
+* Python 3.12.10
+* Operating System: Windows
 
 ### Installation
 
 1. **Clone the repository** (or unzip the project folder).
 2. **Create a virtual environment** (optional but recommended):
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+py -3.12 -m venv venv
+venv\Scripts\activate  # for Windows
 
 ```
 
@@ -112,15 +114,31 @@ The cleaning process follows these mathematical steps:
 
 ### B. Stitching (`stitcher.py`)
 
-To merge chunks (like Chunk 1 and Chunk 2), we use a two-step registration:
+To merge chunks (like Chunk 1 and Chunk 2), we use a robust **Global-to-Local** registration pipeline using Open3D:
 
-1. **Global Alignment:** We downsample the mesh and calculate FPFH (Fast Point Feature Histograms) features. We use RANSAC to roughly align the two chunks based on these features.
-2. **Fine Alignment (ICP):** We use the Iterative Closest Point algorithm to tightly lock the two meshes together.
+1. **Preprocessing & Feature Extraction:**
+* The system downsamples the high-resolution meshes using a voxel grid (0.5 units) to make calculations faster.
+* It computes **FPFH (Fast Point Feature Histograms)** features. These describe the 3D shape around each point, allowing the algorithm to recognize similar shapes even if they are in different positions.
+
+
+2. **Global Alignment (RANSAC):**
+* We use a RANSAC-based matching algorithm that compares the FPFH features of the two meshes.
+* This step finds a rough alignment without needing a manual starting position. It checks millions of possibilities to find the one where the shapes overlap best.
+
+
+3. **Fine Alignment (Point-to-Plane ICP):**
+* Once loosely aligned, we run the **Iterative Closest Point (ICP)** algorithm.
+* We specifically use the **Point-to-Plane** metric (instead of Point-to-Point), which allows the meshes to slide along flat surfaces (like roads) to find the perfect lock.
+
+
+4. **Merging:**
+* The "moving" mesh is transformed using the calculated matrix and merged into the "fixed" mesh to create a single continuous environment.
+
 
 ## 7. Dependencies
 
 * **FastAPI & Uvicorn:** For creating the automation server.
-* **Open3D:** For geometry processing, point cloud operations, and stitching.
+* **Open3D:** For geometry processing, feature extraction (FPFH), and registration (RANSAC/ICP).
 * **PyMeshLab:** For advanced mesh filters (Poisson reconstruction, simplification).
 * **NumPy:** For numerical calculations.
 
